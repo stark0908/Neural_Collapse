@@ -1,0 +1,7 @@
+CLIP, VITB16-> ERM +NC, CORAL +NC, ADAIN +NC, SWAD +NC, CROSSGrad +NC
+0.1,0.2,0.5,0.8 splits
+To Track- Acc, CE Loss, NC Loss
+3 Train(), 1 Test()
+2 Train(), 2 Test()
+PACS, OfficeHome, VLCS
+Today- PACS
