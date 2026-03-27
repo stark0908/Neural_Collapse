@@ -12,11 +12,18 @@ import numpy as np
 import pandas as pd
 from itertools import cycle
 import clip
+import argparse
+from tqdm import trange
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--batch", type=int, default=32, help="Batch size")
+parser.add_argument("--gpu", type=int, default=0, help="GPU ID to use")
+args = parser.parse_args()
 
 # ==============================
 # DEVICE
 # ==============================
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
 
 # ==============================
 # CONFIG
@@ -25,7 +32,7 @@ DATA_ROOT = "/home/23dcs505/datasets/PACS/pacs_data/pacs_data"
 OUT_FILE = "clip_pacs_results.csv"
 
 epochs = 30
-batch_size = 32
+batch_size = args.batch
 lr = 5e-5
 weight_decay = 1e-4
 
@@ -196,7 +203,8 @@ def train_model(train_domains, test_domains, frac, cfg):
     train_iters = [cycle(loader) for loader in train_loaders]
     steps_per_epoch = min(len(l) for l in train_loaders)
 
-    for epoch in range(epochs):
+    pbar = trange(epochs, desc="Training Epochs")
+    for epoch in pbar:
         model.train()
 
         for _ in range(steps_per_epoch):
@@ -204,7 +212,7 @@ def train_model(train_domains, test_domains, frac, cfg):
             batches = [next(it) for it in train_iters]
 
             optimizer.zero_grad()
-            total_loss = 0.0
+            total_loss = torch.tensor(0.0, device=device)
             feats_list = []
 
             for x, y in batches:
@@ -222,6 +230,8 @@ def train_model(train_domains, test_domains, frac, cfg):
 
             total_loss.backward()
             optimizer.step()
+            
+        pbar.set_postfix(loss=f"{total_loss.item():.4f}")
 
     # ======================
     # EVAL
