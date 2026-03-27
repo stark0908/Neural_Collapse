@@ -28,8 +28,8 @@ device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
 # ==============================
 # CONFIG
 # ==============================
-DATA_ROOT = "/home/23dcs505/datasets/PACS/pacs_data/pacs_data"
-OUT_FILE = "clip_pacs_results.csv"
+DATA_ROOT = "/home/23dcs505/datasets/home_office/Office/"
+OUT_FILE = "clip_officehome_results.csv"
 
 epochs = 30
 batch_size = args.batch
@@ -41,7 +41,7 @@ lambda_nc = 0.01
 nc_start_epoch = 5
 
 fractions = [0.1, 0.2, 0.5, 0.8]
-domains = ["art_painting", "cartoon", "photo", "sketch"]
+domains = ["Art", "Clipart", "Real World"]
 
 methods = [
     {"name": "ERM", "coral": False, "nc": False},
