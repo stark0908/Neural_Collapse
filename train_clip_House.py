@@ -14,6 +14,9 @@ from itertools import cycle
 import clip
 import argparse
 from tqdm import trange
+from PIL import ImageFile
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch", type=int, default=32, help="Batch size")
