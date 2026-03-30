@@ -31,7 +31,7 @@ device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
 # CONFIG
 # ==============================
 DATA_ROOT = "/home/23dcs505/datasets/PACS/pacs_data/pacs_data"
-OUT_FILE = "shuffled_clip_pacs_results.csv"
+OUT_FILE = "clip_pacs_domain_agnostic.csv"
 
 epochs = 30
 batch_size = args.batch
