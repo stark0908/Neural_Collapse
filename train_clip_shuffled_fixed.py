@@ -25,7 +25,7 @@ args, _ = parser.parse_known_args()
 # ==============================
 # DEVICE
 # ==============================
-device = torch.device(f"cuda:{args.gpu}") if torch.cuda.is_available() else "cpu")
+device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
 
 # ==============================
 # CONFIG
