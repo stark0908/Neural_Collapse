@@ -181,7 +181,7 @@ def domain_mean_variance_loss(feats_list, labels_list):
         M = torch.stack(domain_means, dim=0)  # [D, 512]
 
         # variance across domain axis
-        var = M.var(dim=0, unbiased=False).mean()
+        var = M.var(dim=0, unbiased=False).sum()
 
         loss += var
         count += 1
