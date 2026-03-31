@@ -30,13 +30,13 @@ device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
 # CONFIG
 # ==============================
 DATA_ROOT = "/home/23dcs505/datasets/PACS/pacs_data/pacs_data"
-OUT_FILE  = "sketch_only_mlp.csv"
+OUT_FILE  = "sketch_baseline.csv"
 
 TRAIN_DOMAINS = ["art_painting", "cartoon", "photo"]
 TEST_DOMAINS  = ["sketch"]
 
 epochs         = 100          # 10 checkpoints at every 10th epoch
-log_interval   = 10           # eval & log every this many epochs
+eval_interval  = 10            # evaluate every N epochs to track best (log once per run)
 num_runs       = 1           # independent runs per (fraction, method)
 batch_size     = args.batch
 lr             = 5e-5
@@ -55,7 +55,7 @@ methods = [
     {"name": "CORAL+NC", "coral": True,  "nc": True},
 ]
 
-num_workers = 8
+num_workers = 16
 
 # ==============================
 # SEED
@@ -100,11 +100,12 @@ class CLIPModel(nn.Module):
     def forward(self, x, return_feats=False):
         with torch.no_grad():
             feats = self.model.encode_image(x)
-        feats  = feats.float()
-        feats  = self.mlp(feats)
-        feats  = F.normalize(feats, dim=1)
-        logits = self.fc(feats)
-        return (logits, feats) if return_feats else logits
+        feats      = feats.float()
+        feats      = self.mlp(feats)
+        feats_raw  = feats                      # pre-norm: use for CORAL
+        feats_norm = F.normalize(feats, dim=1)  # post-norm: use for CE + NC
+        logits     = self.fc(feats_norm)
+        return (logits, feats_norm, feats_raw) if return_feats else logits
 
 # ==============================
 # LOSSES
@@ -231,12 +232,17 @@ def train_model(frac, cfg, run_id, df):
 
     steps_per_epoch = max(len(l) for l in train_loaders)
 
-    # Accumulators for the current 10-epoch window
-    window_ce_loss    = 0.0
-    window_coral_loss = 0.0
-    window_nc_loss    = 0.0
-    window_total_loss = 0.0
-    window_steps      = 0
+    # Best-checkpoint trackers
+    best_avg_acc   = -1.0
+    best_worst_acc = -1.0
+    best_val_loss  = float("inf")
+    best_epoch     = -1
+    best_ce        = 0.0
+    best_coral     = 0.0
+    best_nc        = 0.0
+    best_train     = 0.0
+
+    eval_interval  = 10   # evaluate every 10 epochs internally to find best
 
     pbar = trange(epochs, desc=f"Run {run_id} | {cfg['name']} | frac={frac}")
 
@@ -247,6 +253,11 @@ def train_model(frac, cfg, run_id, df):
         ]
 
         model.train()
+        epoch_ce_loss    = 0.0
+        epoch_coral_loss = 0.0
+        epoch_nc_loss    = 0.0
+        epoch_total_loss = 0.0
+        epoch_steps      = 0
 
         for _ in range(steps_per_epoch):
             batches = [next(it) for it in train_iters]
@@ -256,24 +267,26 @@ def train_model(frac, cfg, run_id, df):
             coral_val = torch.tensor(0.0, device=device)
             nc_val    = torch.tensor(0.0, device=device)
 
-            feats_list  = []
-            labels_list = []
+            feats_norm_list = []   # post-norm → NC loss
+            feats_raw_list  = []   # pre-norm  → CORAL loss
+            labels_list     = []
 
             for x, y in batches:
-                x, y    = x.to(device), y.to(device)
-                logits, feats = model(x, return_feats=True)
+                x, y = x.to(device), y.to(device)
+                logits, feats_norm, feats_raw = model(x, return_feats=True)
                 ce_val += criterion(logits, y)
-                feats_list.append(feats)
+                feats_norm_list.append(feats_norm)
+                feats_raw_list.append(feats_raw)
                 labels_list.append(y)
 
             if cfg["nc"] and epoch >= nc_start_epoch:
-                all_feats  = torch.cat(feats_list,  dim=0)
-                all_labels = torch.cat(labels_list, dim=0)
+                all_feats  = torch.cat(feats_norm_list, dim=0)
+                all_labels = torch.cat(labels_list,     dim=0)
                 nc_val     = nc_loss(all_feats, all_labels)
 
             if cfg["coral"] and len(TRAIN_DOMAINS) > 1:
-                if all(f.size(0) >= 2 for f in feats_list):
-                    coral_val = coral_loss(feats_list)
+                if all(f.size(0) >= 2 for f in feats_raw_list):
+                    coral_val = coral_loss(feats_raw_list)
                 else:
                     print("[WARN] Skipping CORAL this step: a domain batch has < 2 samples")
 
@@ -281,58 +294,65 @@ def train_model(frac, cfg, run_id, df):
             total.backward()
             optimizer.step()
 
-            # accumulate for window average
-            window_ce_loss    += ce_val.item()
-            window_coral_loss += coral_val.item()
-            window_nc_loss    += nc_val.item()
-            window_total_loss += total.item()
-            window_steps      += 1
+            epoch_ce_loss    += ce_val.item()
+            epoch_coral_loss += coral_val.item()
+            epoch_nc_loss    += nc_val.item()
+            epoch_total_loss += total.item()
+            epoch_steps      += 1
 
-        pbar.set_postfix(loss=f"{window_total_loss / max(window_steps, 1):.4f}")
+        avg_train = epoch_total_loss / max(epoch_steps, 1)
+        pbar.set_postfix(loss=f"{avg_train:.4f}", best=f"{best_avg_acc:.4f}")
 
-        # ---------- checkpoint every log_interval epochs ----------
-        if (epoch + 1) % log_interval == 0:
+        # ---------- evaluate every eval_interval epochs to track best ----------
+        if (epoch + 1) % eval_interval == 0:
             avg_acc, worst_acc, avg_val_loss = evaluate(model, test_loaders, criterion)
-
-            avg_ce    = window_ce_loss    / max(window_steps, 1)
-            avg_coral = window_coral_loss / max(window_steps, 1)
-            avg_nc    = window_nc_loss    / max(window_steps, 1)
-            avg_total = window_total_loss / max(window_steps, 1)
 
             print(
                 f"  Epoch {epoch+1:3d} | "
                 f"Acc={avg_acc:.4f}  Worst={worst_acc:.4f} | "
-                f"CE={avg_ce:.4f}  CORAL={avg_coral:.4f}  NC={avg_nc:.4f}  "
-                f"Train={avg_total:.4f}  Val={avg_val_loss:.4f}"
+                f"CE={epoch_ce_loss/max(epoch_steps,1):.4f}  "
+                f"CORAL={epoch_coral_loss/max(epoch_steps,1):.4f}  "
+                f"NC={epoch_nc_loss/max(epoch_steps,1):.4f}  "
+                f"Train={avg_train:.4f}  Val={avg_val_loss:.4f}"
             )
 
-            df.loc[len(df)] = [
-                run_id,
-                str(TRAIN_DOMAINS),
-                str(TEST_DOMAINS),
-                frac,
-                cfg["name"],
-                epoch + 1,
-                round(avg_acc,    4),
-                round(worst_acc,  4),
-                round(avg_ce,     4),
-                round(avg_coral,  4),
-                round(avg_nc,     4),
-                round(avg_total,  4),
-                round(avg_val_loss, 4),
-            ]
+            if avg_acc > best_avg_acc:
+                best_avg_acc   = avg_acc
+                best_worst_acc = worst_acc
+                best_val_loss  = avg_val_loss
+                best_epoch     = epoch + 1
+                best_ce        = epoch_ce_loss    / max(epoch_steps, 1)
+                best_coral     = epoch_coral_loss / max(epoch_steps, 1)
+                best_nc        = epoch_nc_loss    / max(epoch_steps, 1)
+                best_train     = avg_train
 
-            # atomic save after every checkpoint
-            tmp = OUT_FILE + ".tmp"
-            df.to_csv(tmp, index=False)
-            os.replace(tmp, OUT_FILE)
+    # ---------- log single best row for this run ----------
+    print(
+        f"\n  [BEST] Epoch {best_epoch} | "
+        f"Acc={best_avg_acc:.4f}  Worst={best_worst_acc:.4f} | "
+        f"CE={best_ce:.4f}  CORAL={best_coral:.4f}  NC={best_nc:.4f}  "
+        f"Train={best_train:.4f}  Val={best_val_loss:.4f}"
+    )
 
-            # reset window accumulators
-            window_ce_loss    = 0.0
-            window_coral_loss = 0.0
-            window_nc_loss    = 0.0
-            window_total_loss = 0.0
-            window_steps      = 0
+    df.loc[len(df)] = [
+        run_id,
+        str(TRAIN_DOMAINS),
+        str(TEST_DOMAINS),
+        frac,
+        cfg["name"],
+        best_epoch,
+        round(best_avg_acc,   4),
+        round(best_worst_acc, 4),
+        round(best_ce,        4),
+        round(best_coral,     4),
+        round(best_nc,        4),
+        round(best_train,     4),
+        round(best_val_loss,  4),
+    ]
+
+    tmp = OUT_FILE + ".tmp"
+    df.to_csv(tmp, index=False)
+    os.replace(tmp, OUT_FILE)
 
     return df
 
@@ -366,7 +386,7 @@ def run():
                     (df["fraction"] == frac)          &
                     (df["method"]   == cfg["name"])
                 )
-                if mask.sum() >= (epochs // log_interval):
+                if mask.sum() >= 1:  # 1 row per run (best epoch only)
                     print(f"[SKIP] run={run_id} frac={frac} method={cfg['name']}")
                     continue
 
