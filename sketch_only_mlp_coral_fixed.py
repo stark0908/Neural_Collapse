@@ -49,8 +49,8 @@ nc_start_epoch = 5
 fractions = [0.1, 0.2, 0.5, 0.8]
 
 methods = [
-    {"name": "ERM",      "coral": False, "nc": False},
-    {"name": "ERM+NC",   "coral": False, "nc": True},
+    {"name": "ERM",      "coral": True, "nc": False},
+    {"name": "ERM+NC",   "coral": True, "nc": True},
     {"name": "CORAL",    "coral": True,  "nc": False},
     {"name": "CORAL+NC", "coral": True,  "nc": True},
 ]
@@ -277,6 +277,9 @@ def train_model(frac, cfg, run_id, df):
             if cfg["coral"] and len(TRAIN_DOMAINS) > 1:
                 if all(f.size(0) >= 2 for f in feats_raw_list):
                     coral_val = coral_loss(feats_raw_list)
+                    print(f"[DEBUG] feats_raw_list sizes: {[f.shape for f in feats_raw_list]}")
+                    print(f"[DEBUG] feats_raw sample norms: {[f.norm(dim=1).mean().item():.4f for f in feats_raw_list]}")
+                    print(f"[DEBUG] coral_val: {coral_val.item():.8f}")
                 else:
                     print("[WARN] Skipping CORAL this step: a domain batch has < 2 samples")
 
