@@ -378,7 +378,7 @@ def train_model(frac, cfg, run_id, df):
     print(
         f"\n  [BEST] Epoch {best_epoch} | "
         f"Acc={best_avg_acc:.4f}  Worst={best_worst_acc:.4f} | "
-        f"CE={best_ce:.4f}  CORAL={best_coral:.4f}  NC={best_nc:.4f}  "
+        f"CE={best_ce:.4f}  CORAL={best_coral:.4f}  NC={best_nc:.4f}  DM={best_dm:.4f}  "
         f"Train={best_train:.4f}  Val={best_val_loss:.4f}"
     )
 
