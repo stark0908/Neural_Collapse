@@ -194,9 +194,11 @@ def train_model(train_domains, test_domains, frac, cfg):
 
     model = CLIPModel(num_classes).to(device)
 
-    optimizer = optim.Adam(model.fc.parameters(),
-                           lr=lr,
-                           weight_decay=weight_decay)
+    optimizer = optim.Adam(
+        list(model.mlp.parameters()) + list(model.fc.parameters()),
+        lr=lr,
+        weight_decay=weight_decay
+    )
 
     criterion = nn.CrossEntropyLoss()
 
