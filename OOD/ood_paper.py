@@ -52,14 +52,19 @@ import torchvision.models as models
 class ResNet18Feat(nn.Module):
     def __init__(self, num_classes=80):
         super().__init__()
-        base = models.resnet18(weights="IMAGENET1K_V1")
+        base = models.resnet18()
         self.encoder = nn.Sequential(*list(base.children())[:-1])
         self.fc = nn.Linear(512, num_classes)
         self.scale = nn.Parameter(torch.tensor(10.0))
+        nn.init.normal_(self.fc.weight, std=0.01)
+        nn.init.zeros_(self.fc.bias)
 
     def forward(self, x, return_both=False):
         feat = self.encoder(x)
         feat = feat.view(feat.size(0), -1)
+
+        # 🔥 feature normalization ONLY for stability
+        feat = feat / (feat.norm(dim=1, keepdim=True) + 1e-6)
 
         # 🔥 standard linear with scaling (unbounded logits for energy OOD, raw features)
         logits = self.scale * self.fc(feat)
@@ -74,8 +79,8 @@ model = ResNet18Feat().to(device)
 # =========================
 # Optimizer
 # =========================
-optimizer = torch.optim.SGD(model.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
-criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+criterion = nn.CrossEntropyLoss()
 
 # =========================
 # Entropy loss (NEW)
@@ -200,7 +205,9 @@ def train():
             f"Loss: {total_loss/len(trainloader):.4f} | "
             f"NC1: {nc1:.6f} | "
             f"AUROC: {auroc:.4f} | "
-            f"FPR95: {fpr95:.4f}"
+            f"FPR95: {fpr95:.4f} | "
+            f"LogitStd: {logits.std().item():.4f} | "
+            f"FeatStd: {feat.std().item():.4f}"
         )
 
 # =========================
