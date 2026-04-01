@@ -136,7 +136,7 @@ def energy_score(logits):
 
 def compute_ood_metrics(id_scores, ood_scores):
     labels = np.concatenate([np.ones_like(id_scores), np.zeros_like(ood_scores)])
-    scores = np.concatenate([id_scores, ood_scores])
+    scores = -np.concatenate([id_scores, ood_scores])
 
     auroc = roc_auc_score(labels, scores)
     fpr, tpr, _ = roc_curve(labels, scores)
