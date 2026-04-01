@@ -56,19 +56,18 @@ class ResNet18Feat(nn.Module):
         self.encoder = nn.Sequential(*list(base.children())[:-1])
         self.fc = nn.Linear(512, num_classes)
 
-    def forward(self, x, return_feat=False):
+    def forward(self, x, return_both=False):
         feat = self.encoder(x)
         feat = feat.view(feat.size(0), -1)
 
-        # 🔥 ALWAYS normalize features (important)
-        feat = F.normalize(feat, dim=1)
+        # 🔥 ALWAYS normalize features (important for NC)
+        feat_norm = F.normalize(feat, dim=1)
 
-        if return_feat:
-            return feat
+        # 🔥 standard linear (unbounded logits for energy OOD)
+        logits = self.fc(feat_norm)
 
-        # 🔥 normalize classifier weights (prototype-like)
-        w = F.normalize(self.fc.weight, dim=1)
-        logits = F.linear(feat, w)
+        if return_both:
+            return logits, feat_norm
 
         return logits
 
@@ -83,10 +82,19 @@ criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 # =========================
 # Entropy loss (NEW)
 # =========================
-def entropy_loss(feat):
-    # maximize spread → minimize similarity
-    sim = torch.mm(feat, feat.t())
-    loss = sim.mean()
+def entropy_loss(feat, eps=1e-8):
+    # normalize features
+    feat = F.normalize(feat, eps=eps, p=2, dim=-1)
+    # pairwise dot products (= inverse distance)
+    dots = torch.mm(feat, feat.t())
+    n = feat.shape[0]
+    dots.view(-1)[:: (n + 1)].fill_(-1)  # fill diagonal with -1
+    # max inner prod -> min distance
+    _, I = torch.max(dots, dim=1)
+    
+    # pairwise distance and loss calculation
+    distances = F.pairwise_distance(feat, feat[I], p=2, eps=eps)
+    loss = -torch.log(distances + eps).mean()
     return loss
 
 # =========================
@@ -99,7 +107,7 @@ def compute_nc1(model, dataloader):
     with torch.no_grad():
         for x, y in dataloader:
             x = x.to(device)
-            feat = model(x, return_feat=True)
+            _, feat = model(x, return_both=True)
             features.append(feat.cpu())
             labels.append(y)
 
@@ -168,8 +176,8 @@ def train():
 
             optimizer.zero_grad()
 
-            feat = model(x, return_feat=True)
-            logits = model(x)
+            # 🔥 Fix: single forward pass
+            logits, feat = model(x, return_both=True)
 
             ce_loss = criterion(logits, y)
 
