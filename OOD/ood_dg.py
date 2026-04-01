@@ -113,7 +113,10 @@ def filter_by_orig_indices(dataset, orig_indices):
     Returns a Subset and a label-remap dict {orig_label -> new_label}.
     """
     remap = {orig: new for new, orig in enumerate(sorted(orig_indices))}
-    kept  = [i for i, (_, y) in enumerate(dataset) if y in orig_indices]
+
+    # FIX: Iterate over dataset.targets, NOT the dataset itself
+    kept = [i for i, y in enumerate(dataset.targets) if y in orig_indices]
+
     return Subset(dataset, kept), remap
 
 
