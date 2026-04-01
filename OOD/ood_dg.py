@@ -19,10 +19,12 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 # ARGS
 # ==============================
 parser = argparse.ArgumentParser()
-parser.add_argument("--gpu",    type=int,   default=0)
-parser.add_argument("--batch",  type=int,   default=32)
-parser.add_argument("--epochs", type=int,   default=100)
-parser.add_argument("--method", type=str,   default="all", choices=["ERM", "ERM+NC1", "ERM+NC1+NC2", "all"])
+parser.add_argument("--gpu",     type=int,   default=0)
+parser.add_argument("--batch",   type=int,   default=32)
+parser.add_argument("--epochs",  type=int,   default=100)
+parser.add_argument("--workers", type=int,   default=4)
+parser.add_argument("--method",  type=str,   default="all",
+                    choices=["ERM", "ERM+NC1", "ERM+NC1+NC2", "all"])
 args = parser.parse_args()
 
 device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -56,7 +58,7 @@ lr           = 5e-5
 weight_decay = 1e-4
 batch_size   = args.batch
 epochs       = args.epochs
-num_workers  = 8
+num_workers  = args.workers
 eval_interval = 10
 
 # NC loss weights
@@ -132,6 +134,7 @@ class RemappedSubset(torch.utils.data.Dataset):
 def make_train_loaders():
     loaders = []
     for d in TRAIN_DOMAINS:
+        print(f"  [data] loading train domain: {d} ...", flush=True)
         ds_full = datasets.ImageFolder(os.path.join(DATA_ROOT, d), train_tf)
         subset, remap = filter_by_orig_indices(ds_full, ID_ORIG_INDICES)
         ds = RemappedSubset(subset, remap)
@@ -141,8 +144,10 @@ def make_train_loaders():
             shuffle=True,
             drop_last=True,
             num_workers=num_workers,
-            pin_memory=True,
+            pin_memory=(num_workers > 0),
+            persistent_workers=(num_workers > 0),
         )
+        print(f"         → {len(ds)} samples, {len(loader)} steps", flush=True)
         loaders.append(loader)
     return loaders
 
@@ -153,19 +158,23 @@ def make_test_loaders():
       - id_loader  : sketch images of ID classes   (labels remapped 0..3)
       - ood_loader : sketch images of OOD classes  (labels are original — not used for acc)
     """
+    print(f"  [data] loading test domain: {TEST_DOMAIN} ...", flush=True)
     ds_full = datasets.ImageFolder(os.path.join(DATA_ROOT, TEST_DOMAIN), val_tf)
 
     id_subset,  id_remap  = filter_by_orig_indices(ds_full, ID_ORIG_INDICES)
     ood_subset, _         = filter_by_orig_indices(ds_full, OOD_ORIG_INDICES)
 
     id_ds  = RemappedSubset(id_subset,  id_remap)
-    # OOD labels don't matter for OOD detection (we only use energy scores)
     ood_ds = ood_subset
 
     id_loader  = DataLoader(id_ds,  batch_size=batch_size, shuffle=False,
-                            num_workers=num_workers, pin_memory=True)
+                            num_workers=num_workers, pin_memory=(num_workers > 0),
+                            persistent_workers=(num_workers > 0))
     ood_loader = DataLoader(ood_ds, batch_size=batch_size, shuffle=False,
-                            num_workers=num_workers, pin_memory=True)
+                            num_workers=num_workers, pin_memory=(num_workers > 0),
+                            persistent_workers=(num_workers > 0))
+
+    print(f"         → ID: {len(id_ds)} samples | OOD: {len(ood_ds)} samples", flush=True)
     return id_loader, ood_loader
 
 # ==============================
@@ -178,7 +187,7 @@ class ResNet50Model(nn.Module):
     """
     def __init__(self, num_classes):
         super().__init__()
-        resnet = models.resnet50(pretrained=True)
+        resnet = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
         self.encoder = nn.Sequential(*list(resnet.children())[:-1])  # [B,2048,1,1]
         self.proj    = nn.Linear(2048, 512)
 
@@ -364,7 +373,9 @@ def train_model(cfg, run_id, df):
     steps_per_epoch = max(len(l) for l in train_loaders)
 
     # ---------- model ----------
+    print(f"  [model] initialising ResNet50Model on {device} ...", flush=True)
     model     = ResNet50Model(NUM_ID_CLASSES).to(device)
+    print(f"  [model] done. starting training loop ...", flush=True)
     optimizer = torch.optim.Adam(
         list(model.proj.parameters()) +
         list(model.mlp.parameters()) +
