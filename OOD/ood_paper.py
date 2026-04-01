@@ -52,7 +52,7 @@ import torchvision.models as models
 class ResNet18Feat(nn.Module):
     def __init__(self, num_classes=80):
         super().__init__()
-        base = models.resnet18()
+        base = models.resnet18(weights="IMAGENET1K_V1")
         self.encoder = nn.Sequential(*list(base.children())[:-1])
         self.fc = nn.Linear(512, num_classes)
         self.scale = nn.Parameter(torch.tensor(10.0))
