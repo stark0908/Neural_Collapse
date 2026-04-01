@@ -6,6 +6,8 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset
 import numpy as np
+from tqdm import tqdm
+from sklearn.metrics import roc_auc_score, roc_curve
 
 # =========================
 # Args
@@ -114,6 +116,27 @@ def compute_nc1(model, dataloader):
     nc1 /= len(classes)
     return nc1
 
+def compute_ood_metrics(id_scores, ood_scores):
+    labels = np.concatenate([
+        np.ones_like(id_scores),   # ID = 1
+        np.zeros_like(ood_scores)  # OOD = 0
+    ])
+
+    scores = np.concatenate([id_scores, ood_scores])
+
+    # IMPORTANT: flip sign (since energy lower = ID)
+    scores = -scores
+
+    # AUROC
+    auroc = roc_auc_score(labels, scores)
+
+    # FPR@95TPR
+    fpr, tpr, thresholds = roc_curve(labels, scores)
+    idx = np.argmin(np.abs(tpr - 0.95))
+    fpr95 = fpr[idx]
+
+    return auroc, fpr95
+
 # =========================
 # Energy score
 # =========================
@@ -154,12 +177,16 @@ def evaluate_ood():
 # =========================
 # Training
 # =========================
+
+
 def train():
     for epoch in range(args.epochs):
         model.train()
         total_loss = 0
 
-        for x, y in trainloader:
+        pbar = tqdm(trainloader, desc=f"Epoch {epoch+1}/{args.epochs}", leave=False)
+
+        for x, y in pbar:
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
 
@@ -176,10 +203,29 @@ def train():
 
             total_loss += loss.item()
 
-        # Compute NC1
+            avg_loss = total_loss / (pbar.n + 1)
+            pbar.set_postfix({"loss": f"{avg_loss:.4f}"})
+
+        # =========================
+        # After each epoch
+        # =========================
+
+        # NC1
         nc1 = compute_nc1(model, testloader_id)
 
-        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {total_loss:.3f} | NC1: {nc1:.6f}")
+        # OOD scores
+        id_scores, ood_scores = evaluate_ood()
+
+        # Metrics
+        auroc, fpr95 = compute_ood_metrics(id_scores, ood_scores)
+
+        print(
+            f"Epoch {epoch+1}/{args.epochs} | "
+            f"Loss: {total_loss:.3f} | "
+            f"NC1: {nc1:.6f} | "
+            f"AUROC: {auroc:.4f} | "
+            f"FPR95: {fpr95:.4f}"
+        )
 
 # =========================
 # Metrics
