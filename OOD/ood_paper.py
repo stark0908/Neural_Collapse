@@ -55,19 +55,17 @@ class ResNet18Feat(nn.Module):
         base = models.resnet18()
         self.encoder = nn.Sequential(*list(base.children())[:-1])
         self.fc = nn.Linear(512, num_classes)
+        self.scale = nn.Parameter(torch.tensor(10.0))
 
     def forward(self, x, return_both=False):
         feat = self.encoder(x)
         feat = feat.view(feat.size(0), -1)
 
-        # 🔥 ALWAYS normalize features (important for NC)
-        feat_norm = F.normalize(feat, dim=1)
-
-        # 🔥 standard linear (unbounded logits for energy OOD)
-        logits = self.fc(feat_norm)
+        # 🔥 standard linear with scaling (unbounded logits for energy OOD, raw features)
+        logits = self.scale * self.fc(feat)
 
         if return_both:
-            return logits, feat_norm
+            return logits, feat
 
         return logits
 
@@ -133,7 +131,7 @@ def energy_score(logits):
 
 def compute_ood_metrics(id_scores, ood_scores):
     labels = np.concatenate([np.ones_like(id_scores), np.zeros_like(ood_scores)])
-    scores = -np.concatenate([id_scores, ood_scores])
+    scores = np.concatenate([id_scores, ood_scores])
 
     auroc = roc_auc_score(labels, scores)
     fpr, tpr, _ = roc_curve(labels, scores)
@@ -181,8 +179,8 @@ def train():
 
             ce_loss = criterion(logits, y)
 
-            # 🔥 entropy regularization
-            ent_loss = entropy_loss(feat) if args.entropy_weight > 0 else 0
+            # 🔥 entropy regularization removed for strict OOD calibration (as per paper)
+            ent_loss = 0
 
             loss = ce_loss + args.entropy_weight * ent_loss
 
