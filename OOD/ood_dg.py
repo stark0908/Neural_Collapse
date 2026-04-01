@@ -396,9 +396,9 @@ def train_model(cfg, run_id, df):
         ce=0.0, nc1_l=0.0, nc2_l=0.0,
     )
 
-    pbar = trange(epochs, desc=f"{cfg['name']} | run={run_id}")
+    #pbar = trange(epochs, desc=f"{cfg['name']} | run={run_id}")
 
-    for epoch in pbar:
+    for epoch in range(epochs):
         model.train()
         ep_ce = ep_nc1 = ep_nc2 = ep_total = ep_steps = 0.0
 
@@ -409,7 +409,11 @@ def train_model(cfg, run_id, df):
             for l in train_loaders
         ]
 
-        for _ in range(steps_per_epoch):
+        pbar = tqdm(range(steps_per_epoch),
+            desc=f"{cfg['name']} | Ep {epoch+1}/{epochs}",
+            leave=False)
+
+        for _ in pbar:
             batches = [next(it) for it in iters]
             optimizer.zero_grad()
 
@@ -446,8 +450,8 @@ def train_model(cfg, run_id, df):
             ep_total += total.item()
             ep_steps += 1
 
-        avg_total = ep_total / max(ep_steps, 1)
-        pbar.set_postfix(loss=f"{avg_total:.4f}", best_auroc=f"{best['auroc']:.4f}")
+            avg_total = ep_total / max(ep_steps, 1)
+            pbar.set_postfix(loss=f"{avg_total:.4f}", best_auroc=f"{best['auroc']:.4f}")
 
         # ---------- evaluate every eval_interval epochs ----------
         if (epoch + 1) % eval_interval == 0:

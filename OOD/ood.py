@@ -154,20 +154,24 @@ def evaluate_ood():
 
     for x, _ in testloader_id:
         x = x.to(device, non_blocking=True)
-        logits = model(x)
+        feat = model(x, return_feat=True)
 
         if args.use_nc:
-            logits = F.normalize(logits, dim=1)
+            feat = F.normalize(feat, dim=1)
+
+        logits = model.fc(feat)
 
         energy = energy_score(logits)
         id_scores.extend(energy.cpu().numpy())
 
     for x, _ in testloader_ood:
         x = x.to(device, non_blocking=True)
-        logits = model(x)
+        feat = model(x, return_feat=True)
 
         if args.use_nc:
-            logits = F.normalize(logits, dim=1)
+            feat = F.normalize(feat, dim=1)
+
+        logits = model.fc(feat)
 
         energy = energy_score(logits)
         ood_scores.extend(energy.cpu().numpy())
@@ -192,10 +196,12 @@ def train():
 
             optimizer.zero_grad()
 
-            logits = model(x)
+            feat = model(x, return_feat=True)
 
             if args.use_nc:
-                logits = F.normalize(logits, dim=1)
+                feat = F.normalize(feat, dim=1)
+
+            logits = model.fc(feat)
 
             loss = criterion(logits, y)
             loss.backward()
@@ -219,9 +225,11 @@ def train():
         # Metrics
         auroc, fpr95 = compute_ood_metrics(id_scores, ood_scores)
 
+        avg_loss = total_loss / len(trainloader)
+
         print(
             f"Epoch {epoch+1}/{args.epochs} | "
-            f"Loss: {total_loss:.3f} | "
+            f"Loss: {avg_loss:.3f} | "
             f"NC1: {nc1:.6f} | "
             f"AUROC: {auroc:.4f} | "
             f"FPR95: {fpr95:.4f}"
