@@ -54,10 +54,26 @@ class ResNet18Feat(nn.Module):
         super().__init__()
         base = models.resnet18()
         self.encoder = nn.Sequential(*list(base.children())[:-1])
-        self.fc = nn.Linear(512, num_classes)
+        
+        self.fc = nn.Linear(512, num_classes, bias=False)
         self.scale = nn.Parameter(torch.tensor(10.0))
-        nn.init.normal_(self.fc.weight, std=0.01)
-        nn.init.zeros_(self.fc.bias)
+        
+        # Exact ETF Configuration
+        K = num_classes
+        D = 512
+        I_K = torch.eye(K)
+        ones_K = torch.ones(K, K)
+        M = ((K / (K - 1.0)) ** 0.5) * (I_K - (1.0 / K) * ones_K)
+        
+        padding = torch.zeros(D - K, K)
+        M_padded = torch.cat([M, padding], dim=0)
+        
+        random_rot = torch.randn(D, D)
+        Q, _ = torch.linalg.qr(random_rot)
+        etf_weights = torch.mm(Q, M_padded).T
+        
+        self.fc.weight.data = etf_weights.float()
+        self.fc.weight.requires_grad = False
 
     def forward(self, x, return_both=False):
         feat = self.encoder(x)
@@ -79,7 +95,7 @@ model = ResNet18Feat().to(device)
 # =========================
 # Optimizer
 # =========================
-optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=0.01, momentum=0.9, weight_decay=5e-4)
 criterion = nn.CrossEntropyLoss()
 
 # =========================

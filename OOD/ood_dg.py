@@ -65,6 +65,8 @@ eval_interval = 10
 lambda_nc1 = 0.1
 lambda_nc2 = 0.1
 nc_start_epoch = 5
+lambda_coral = 0.5
+lambda_oe = 0.1
 
 methods = [
     {"name": "ERM",        "nc1": False, "nc2": False},
@@ -204,7 +206,23 @@ class ResNet50Model(nn.Module):
         )
         self.fc = nn.Linear(512, num_classes, bias=False)
         self.scale = nn.Parameter(torch.tensor(10.0))
-        nn.init.normal_(self.fc.weight, std=0.01)
+        
+        # 1. Exact ETF Configuration
+        K = num_classes
+        D = 512
+        I_K = torch.eye(K)
+        ones_K = torch.ones(K, K)
+        M = ((K / (K - 1.0)) ** 0.5) * (I_K - (1.0 / K) * ones_K)
+        
+        padding = torch.zeros(D - K, K)
+        M_padded = torch.cat([M, padding], dim=0)
+        
+        random_rot = torch.randn(D, D)
+        Q, _ = torch.linalg.qr(random_rot)
+        etf_weights = torch.mm(Q, M_padded).T
+        
+        self.fc.weight.data = etf_weights.float()
+        self.fc.weight.requires_grad = False
 
     def encode_image(self, x):
         with torch.no_grad():
@@ -280,6 +298,15 @@ def nc2_loss(feats, labels, num_classes):
     target.fill_diagonal_(1.0)
 
     return F.mse_loss(G, target)
+
+def coral_loss(source, target):
+    """Deep CORAL penalty minimizing covariance distance between two domains."""
+    d = source.size(1)
+    source_c = source - source.mean(dim=0, keepdim=True)
+    source_cov = (source_c.t() @ source_c) / max(source.size(0) - 1, 1)
+    target_c = target - target.mean(dim=0, keepdim=True)
+    target_cov = (target_c.t() @ target_c) / max(target.size(0) - 1, 1)
+    return (source_cov - target_cov).pow(2).sum() / (4 * d * d)
 
 # ==============================
 # OOD SCORE  (energy)
@@ -390,7 +417,6 @@ def train_model(cfg, run_id, df):
     optimizer = torch.optim.Adam(
         list(model.proj.parameters()) +
         list(model.mlp.parameters()) +
-        list(model.fc.parameters()) +
         [model.scale],
         lr=lr,
         weight_decay=weight_decay,
@@ -429,6 +455,8 @@ def train_model(cfg, run_id, df):
             ce_val  = torch.tensor(0.0, device=device)
             nc1_val = torch.tensor(0.0, device=device)
             nc2_val = torch.tensor(0.0, device=device)
+            coral_val = torch.tensor(0.0, device=device)
+            oe_val  = torch.tensor(0.0, device=device)
 
             all_feats, all_labels = [], []
 
@@ -449,7 +477,25 @@ def train_model(cfg, run_id, df):
                 labels_cat = torch.cat(all_labels)
                 nc2_val    = nc2_loss(feats_cat, labels_cat, NUM_ID_CLASSES)
 
-            total = ce_val + lambda_nc1 * nc1_val + lambda_nc2 * nc2_val
+            # 2. Deep CORAL
+            if len(all_feats) == 3:
+                f_art, f_car, f_pho = all_feats[0], all_feats[1], all_feats[2]
+                coral_val += coral_loss(f_art, f_car)
+                coral_val += coral_loss(f_art, f_pho)
+                coral_val += coral_loss(f_car, f_pho)
+
+            # 3. Virtual Outlier Exposure
+            if len(all_feats) >= 2:
+                idx = torch.randperm(all_feats[1].size(0))
+                virtual_ood = 0.5 * all_feats[0] + 0.5 * all_feats[1][idx]
+                virtual_ood = virtual_ood / (virtual_ood.norm(dim=1, keepdim=True) + 1e-6)
+                virtual_logits = model.scale * model.fc(virtual_ood)
+                virtual_energy = -torch.logsumexp(virtual_logits, dim=1)
+                
+                margin = -2.0
+                oe_val = F.relu(margin - virtual_energy).mean()
+
+            total = ce_val + lambda_nc1 * nc1_val + lambda_nc2 * nc2_val + lambda_coral * coral_val + lambda_oe * oe_val
             total.backward()
             optimizer.step()
 
