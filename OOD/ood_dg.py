@@ -203,6 +203,8 @@ class ResNet50Model(nn.Module):
             nn.Linear(512, 512),
         )
         self.fc = nn.Linear(512, num_classes, bias=False)
+        self.scale = nn.Parameter(torch.tensor(10.0))
+        nn.init.normal_(self.fc.weight, std=0.01)
 
     def encode_image(self, x):
         with torch.no_grad():
@@ -214,8 +216,14 @@ class ResNet50Model(nn.Module):
     def forward(self, x, return_feats=False):
         feats      = self.encode_image(x).float()
         feats      = self.mlp(feats)
+        
+        # Stability normalization
+        feats = feats / (feats.norm(dim=1, keepdim=True) + 1e-6)
         feats_norm = F.normalize(feats, dim=1)
-        logits     = self.fc(feats_norm)
+        
+        # Unbounded logits via scaling
+        logits = self.scale * self.fc(feats)
+        
         if return_feats:
             return logits, feats_norm
         return logits
@@ -382,7 +390,8 @@ def train_model(cfg, run_id, df):
     optimizer = torch.optim.Adam(
         list(model.proj.parameters()) +
         list(model.mlp.parameters()) +
-        list(model.fc.parameters()),
+        list(model.fc.parameters()) +
+        [model.scale],
         lr=lr,
         weight_decay=weight_decay,
     )
@@ -465,7 +474,7 @@ def train_model(cfg, run_id, df):
             nc1_test  = compute_nc1_metric(model, test_id_loader)
 
             print(
-                f"  Ep {epoch+1:3d} | "
+                f"  Ep {epoch+1:3d} | Scale={model.scale.item():.2f} | "
                 f"Acc={acc:.4f}  ValLoss={val_loss:.4f} | "
                 f"AUROC={auroc:.4f}  FPR95={fpr95:.4f}  EGap={energy_gap:.4f} | "
                 f"NC1_train={nc1_train:.5f}  NC1_test={nc1_test:.5f} | "
