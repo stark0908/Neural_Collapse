@@ -6,7 +6,7 @@ The goal is to build a system that can identify inputs that **do not follow the 
 
 ---
 
-## 🚀 Overview
+##  Overview
 
 - Train models on in-distribution (ID) data
 - Detect samples that are **different from training data**
@@ -15,7 +15,7 @@ The goal is to build a system that can identify inputs that **do not follow the 
 
 ---
 
-## 🧠 Key Ideas
+##  Key Ideas
 
 ### 1. Energy-based OOD Detection
 We use **energy scores** to detect anomalies:
@@ -52,7 +52,7 @@ We generate synthetic anomalies during training to improve robustness.
 
 ---
 
-## 📊 Results
+##  Results
 
 | Metric | Value |
 |------|------|
@@ -66,7 +66,7 @@ Key observation:
 
 ---
 
-## 📂 Datasets
+##  Datasets
 
 - CIFAR-100 (controlled OOD setup)
 - PACS dataset (domain shift setup)
